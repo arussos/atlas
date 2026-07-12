@@ -33,7 +33,9 @@ from run_retrieval_benchmark import (
     first_present,
     load_dataset,
     main,
+    parse_ids,
     retrieve_chunks,
+    select_by_ids,
     validate_dataset,
     write_results_atomic,
 )
@@ -216,6 +218,68 @@ class TestFilterQuestions(unittest.TestCase):
         result = filter_questions(questions, None, "ARCHITECTURE", 1)
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["category"], "ARCHITECTURE")
+
+
+class TestParseIds(unittest.TestCase):
+    def test_none_returns_none(self):
+        self.assertIsNone(parse_ids(None))
+
+    def test_single_id(self):
+        self.assertEqual(parse_ids("ABR-API-001"), ["ABR-API-001"])
+
+    def test_multiple_ids(self):
+        self.assertEqual(
+            parse_ids("ABR-ARCH-001,ABR-API-001"),
+            ["ABR-ARCH-001", "ABR-API-001"],
+        )
+
+    def test_whitespace_and_empty_tokens_ignored(self):
+        self.assertEqual(
+            parse_ids(" ABR-ARCH-001 , , ABR-API-001 "),
+            ["ABR-ARCH-001", "ABR-API-001"],
+        )
+
+
+class TestSelectByIds(unittest.TestCase):
+    def setUp(self):
+        self.questions = [
+            _make_question(id="ABR-ARCH-001", category="ARCHITECTURE"),
+            _make_question(id="ABR-DB-001", category="DATABASE"),
+            _make_question(id="ABR-API-001", category="API"),
+        ]
+
+    def test_filter_multiple_ids(self):
+        selected, missing = select_by_ids(
+            self.questions, ["ABR-ARCH-001", "ABR-API-001"]
+        )
+        self.assertEqual(missing, [])
+        self.assertEqual(
+            [q["id"] for q in selected], ["ABR-ARCH-001", "ABR-API-001"]
+        )
+
+    def test_preserves_dataset_order(self):
+        # ID richiesti in ordine inverso rispetto al dataset
+        selected, missing = select_by_ids(
+            self.questions, ["ABR-API-001", "ABR-ARCH-001"]
+        )
+        self.assertEqual(missing, [])
+        self.assertEqual(
+            [q["id"] for q in selected], ["ABR-ARCH-001", "ABR-API-001"]
+        )
+
+    def test_missing_id_reported(self):
+        selected, missing = select_by_ids(
+            self.questions, ["ABR-ARCH-001", "ABR-NOPE-999"]
+        )
+        self.assertEqual([q["id"] for q in selected], ["ABR-ARCH-001"])
+        self.assertEqual(missing, ["ABR-NOPE-999"])
+
+    def test_missing_ids_deduped_in_request_order(self):
+        selected, missing = select_by_ids(
+            self.questions, ["ABR-X", "ABR-Y", "ABR-X"]
+        )
+        self.assertEqual(selected, [])
+        self.assertEqual(missing, ["ABR-X", "ABR-Y"])
 
 
 # ---------------------------------------------------------------------------
@@ -683,6 +747,83 @@ class TestMainValidation(unittest.TestCase):
                 "--category", "NONEXISTENT",
             ])
             self.assertEqual(ret, 1)
+
+
+class TestMainIdsOption(unittest.TestCase):
+    def _dataset_path(self, tmp: str) -> str:
+        p = Path(tmp) / "bench.yaml"
+        _write_yaml(p, MINIMAL_YAML)
+        return str(p)
+
+    def test_ids_filters_selected_questions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset = self._dataset_path(tmp)
+            captured = io.StringIO()
+            with patch("sys.stdout", captured):
+                ret = main([
+                    "--dataset", dataset,
+                    "--project", "ABRAZO",
+                    "--output", os.path.join(tmp, "out.json"),
+                    "--dry-run",
+                    "--ids", "ABR-DB-001",
+                ])
+            output = captured.getvalue()
+            self.assertEqual(ret, 0)
+            self.assertIn("ABR-DB-001", output)
+            self.assertNotIn("ABR-ARCH-001", output)
+
+    def test_ids_preserves_dataset_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset = self._dataset_path(tmp)
+            captured = io.StringIO()
+            # ID richiesti in ordine inverso: l'output deve seguire il dataset
+            with patch("sys.stdout", captured):
+                ret = main([
+                    "--dataset", dataset,
+                    "--project", "ABRAZO",
+                    "--output", os.path.join(tmp, "out.json"),
+                    "--dry-run",
+                    "--ids", "ABR-DB-001,ABR-ARCH-001",
+                ])
+            output = captured.getvalue()
+            self.assertEqual(ret, 0)
+            self.assertLess(
+                output.index("ABR-ARCH-001"),
+                output.index("ABR-DB-001"),
+                "L'ordine del dataset deve essere preservato",
+            )
+
+    def test_ids_missing_exits_1(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset = self._dataset_path(tmp)
+            captured = io.StringIO()
+            with patch("sys.stderr", captured):
+                ret = main([
+                    "--dataset", dataset,
+                    "--project", "ABRAZO",
+                    "--output", os.path.join(tmp, "out.json"),
+                    "--dry-run",
+                    "--ids", "ABR-DB-001,ABR-NOPE-999",
+                ])
+            self.assertEqual(ret, 1)
+            self.assertIn("ABR-NOPE-999", captured.getvalue())
+
+    def test_no_ids_runs_full_dataset(self):
+        # Nessuna regressione: senza --ids tutte le domande sono selezionate.
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset = self._dataset_path(tmp)
+            captured = io.StringIO()
+            with patch("sys.stdout", captured):
+                ret = main([
+                    "--dataset", dataset,
+                    "--project", "ABRAZO",
+                    "--output", os.path.join(tmp, "out.json"),
+                    "--dry-run",
+                ])
+            output = captured.getvalue()
+            self.assertEqual(ret, 0)
+            self.assertIn("ABR-ARCH-001", output)
+            self.assertIn("ABR-DB-001", output)
 
 
 # ---------------------------------------------------------------------------

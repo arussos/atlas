@@ -298,6 +298,39 @@ def filter_questions(
     return result
 
 
+def parse_ids(raw: Optional[str]) -> Optional[list[str]]:
+    """
+    Parsa il valore di --ids in una lista di question_id.
+    Restituisce None se l'opzione non è specificata (comportamento invariato).
+    Token vuoti (es. virgole doppie o spazi) sono ignorati.
+    """
+    if raw is None:
+        return None
+    return [tok.strip() for tok in raw.split(",") if tok.strip()]
+
+
+def select_by_ids(
+    questions: list[dict],
+    ids: list[str],
+) -> tuple[list[dict], list[str]]:
+    """
+    Filtra le domande mantenendo solo quelle il cui id è in `ids`.
+    Preserva l'ordine originale del dataset.
+    Restituisce (selezionate, mancanti) dove `mancanti` elenca — nell'ordine
+    di richiesta e senza duplicati — gli id non presenti nel dataset.
+    """
+    present = {q["id"] for q in questions}
+    wanted = set(ids)
+    selected = [q for q in questions if q["id"] in wanted]
+    seen: set[str] = set()
+    missing: list[str] = []
+    for i in ids:
+        if i not in present and i not in seen:
+            missing.append(i)
+            seen.add(i)
+    return selected, missing
+
+
 # ---------------------------------------------------------------------------
 # HTTP utilities
 # ---------------------------------------------------------------------------
@@ -771,6 +804,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Esegui solo le prime N domande")
     p.add_argument("--question-id", default=None, metavar="ID",
                    help="Esegui una singola domanda per ID")
+    p.add_argument("--ids", default=None, metavar="ID1,ID2,...",
+                   help="Esegui solo le domande con i question_id indicati "
+                        "(lista separata da virgola). Termina con exit 1 se "
+                        "uno o più ID non esistono nel dataset")
     p.add_argument("--category", default=None, metavar="CATEGORY",
                    help="Esegui solo le domande di una categoria")
     p.add_argument("--dry-run", action="store_true",
@@ -797,6 +834,18 @@ def main(argv: Optional[list[str]] = None) -> int:
         for e in errors:
             print(f"  - {e}", file=sys.stderr)
         return 1
+
+    # Filtro --ids: applicato sull'intero dataset prima degli altri filtri.
+    # Ordine originale preservato; ID inesistenti → exit 1.
+    ids = parse_ids(args.ids)
+    if ids is not None:
+        questions, missing = select_by_ids(questions, ids)
+        if missing:
+            print(
+                f"Error: question_id non trovati nel dataset: {', '.join(missing)}",
+                file=sys.stderr,
+            )
+            return 1
 
     selected = filter_questions(questions, args.question_id, args.category, args.limit)
     if not selected:
