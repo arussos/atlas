@@ -551,19 +551,32 @@ def find_knowledge_collection(
     Find a Knowledge Collection by exact name match.
 
     Returns (knowledge_id, knowledge_name).
+    Accepts both a legacy direct list and the paginated dict format
+    introduced in Open WebUI v0.10.2 ({"items": [...], "total": N}).
     Raises RuntimeError if no collection matches ATLAS_KNOWLEDGE_NAME
     or if the API returns an unexpected format.
     """
     url = f"{config.url}/api/v1/knowledge/"
     data = http_get(url, token)
-    if not isinstance(data, list):
+    if isinstance(data, list):
+        collections = data
+    elif isinstance(data, dict):
+        items = data.get("items")
+        if not isinstance(items, list):
+            raise RuntimeError(
+                f"Unexpected response from {url}: "
+                f"'items' is missing or not a list (got {type(items).__name__})."
+            )
+        collections = items
+    else:
         raise RuntimeError(
-            f"Expected list from {url}, got {type(data).__name__}."
+            f"Unexpected response from {url}: "
+            f"expected list or dict, got {type(data).__name__}."
         )
-    for col in data:
+    for col in collections:
         if col.get("name") == config.knowledge_name:
             return col["id"], col["name"]
-    available = [c.get("name", "(unnamed)") for c in data]
+    available = [c.get("name", "(unnamed)") for c in collections]
     raise RuntimeError(
         f"Knowledge Collection '{config.knowledge_name}' not found.\n"
         f"Available: {available}"

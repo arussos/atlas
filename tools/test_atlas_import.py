@@ -562,6 +562,60 @@ def test_needs_sync_rules() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 13. find_knowledge_collection — response parsing
+# ---------------------------------------------------------------------------
+
+def test_knowledge_response_parsing() -> None:
+    print("\n13. find_knowledge_collection() response parsing")
+
+    cfg = ai.SyncConfig(
+        url="http://example.com", email="x", password="x",
+        knowledge_name="Foundation",
+    )
+    collections = [
+        {"id": "abc123", "name": "Foundation"},
+        {"id": "def456", "name": "Networking"},
+    ]
+
+    # Paginated response (Open WebUI v0.10.2+)
+    paginated = {"items": collections, "total": 2}
+    with patch.object(ai, "http_get", return_value=paginated):
+        kid, kname = ai.find_knowledge_collection(cfg, "token")
+    check("paginated: returns correct id", kid == "abc123")
+    check("paginated: returns correct name", kname == "Foundation")
+
+    # Legacy direct list
+    with patch.object(ai, "http_get", return_value=collections):
+        kid, kname = ai.find_knowledge_collection(cfg, "token")
+    check("legacy list: returns correct id", kid == "abc123")
+    check("legacy list: returns correct name", kname == "Foundation")
+
+    # Dict without 'items' key
+    raised = False
+    msg = ""
+    with patch.object(ai, "http_get", return_value={"total": 0}):
+        try:
+            ai.find_knowledge_collection(cfg, "token")
+        except RuntimeError as exc:
+            raised = True
+            msg = str(exc)
+    check("dict without 'items': raises RuntimeError", raised)
+    check("dict without 'items': message mentions 'items'", "items" in msg)
+
+    # 'items' present but not a list
+    raised = False
+    msg = ""
+    with patch.object(ai, "http_get", return_value={"items": "not-a-list", "total": 0}):
+        try:
+            ai.find_knowledge_collection(cfg, "token")
+        except RuntimeError as exc:
+            raised = True
+            msg = str(exc)
+    check("items not list: raises RuntimeError", raised)
+    check("items not list: message mentions type", "str" in msg)
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -585,6 +639,7 @@ def main() -> int:
     test_no_upload_for_synced()
     test_atomic_index_write()
     test_needs_sync_rules()
+    test_knowledge_response_parsing()
 
     passed = sum(1 for _, ok, _ in _results if ok)
     failed = sum(1 for _, ok, _ in _results if not ok)
