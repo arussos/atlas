@@ -2,7 +2,7 @@
 """
 Atlas Knowledge Importer
 
-M2.1.1 — Baseline scanner: discovers Markdown documents in knowledge/
+M2.1.1 — Baseline scanner: discovers Markdown documents in knowledge/<PROJECT>/
           and reports their metadata.
 
 M2.1.2 — Change detection: SHA256-based comparison against a persistent
@@ -11,12 +11,22 @@ M2.1.2 — Change detection: SHA256-based comparison against a persistent
 M2.3   — Sync: uploads NEW (and retries PENDING/FAILED) documents to an
           Open WebUI Knowledge Collection. MODIFIED and DELETED remote
           handling deferred to future milestones.
+
+M2.4   — Multi-project: each project has its own knowledge/<PROJECT>/
+          subdirectory and .state/<PROJECT>.json index. The Knowledge
+          Collection is auto-created if not found.
+          Usage: atlas-import.py {scan,sync,dry-run} <PROJECT>
+
+M2.4.1 — Hardening: PROJECT name validated against ^[A-Z0-9][A-Z0-9_-]{0,63}$;
+          fatal errors (auth, network, collection lookup/create) set
+          SyncStats.aborted=True and produce exit code 1.
 """
 
 import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 import uuid
@@ -34,8 +44,8 @@ from typing import Optional
 
 KNOWLEDGE_DIR = "knowledge"
 STATE_DIR = ".state"
-INDEX_FILE = "knowledge-index.json"
 INDEX_VERSION = 2
+PROJECT_NAME_RE = re.compile(r"^[A-Z0-9][A-Z0-9_-]{0,63}\Z")
 SEPARATOR = "-" * 50
 HTTP_TIMEOUT = 30       # seconds per individual HTTP call
 POLL_INTERVAL = 2       # seconds between processing status polls
@@ -100,7 +110,7 @@ class SyncConfig:
     url: str
     email: str
     password: str
-    knowledge_name: str
+    knowledge_name: str = ""   # set from CLI <project> arg after load_sync_config()
     process_timeout: int = 300
 
 
@@ -111,6 +121,7 @@ class SyncStats:
     uploaded: int = 0
     failed: int = 0
     skipped: int = 0
+    aborted: bool = False   # True when a fatal error stopped the run early
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +132,38 @@ class SyncStats:
 def find_project_root() -> Path:
     """Return the project root directory (parent of the tools/ directory)."""
     return Path(__file__).resolve().parent.parent
+
+
+def resolve_project_paths(project_root: Path, project: str) -> tuple[Path, Path]:
+    """
+    Return (knowledge_dir, index_path) for the given project name.
+
+    knowledge_dir = project_root / knowledge / <project>
+    index_path    = project_root / .state   / <project>.json
+    """
+    knowledge_dir = project_root / KNOWLEDGE_DIR / project
+    index_path = project_root / STATE_DIR / f"{project}.json"
+    return knowledge_dir, index_path
+
+
+def validate_project_name(project: str) -> Optional[str]:
+    """
+    Return None if the project name is valid, or an error message if not.
+
+    Accepted pattern: ^[A-Z0-9][A-Z0-9_-]{0,63}\Z
+    Rejects empty strings, path separators, dots, spaces, lowercase, and
+    trailing newlines (\Z anchors at the absolute end of the string).
+    """
+    if not project:
+        return "PROJECT must not be empty."
+    if not PROJECT_NAME_RE.match(project):
+        return (
+            f"Invalid PROJECT name '{project}'. "
+            "Must match ^[A-Z0-9][A-Z0-9_-]{0,63}$ "
+            "(uppercase letters/digits, underscores, hyphens; "
+            "no path separators, dots, spaces, or lowercase)."
+        )
+    return None
 
 
 def extract_title(file_path: Path) -> Optional[str]:
@@ -377,8 +420,11 @@ def load_sync_config() -> SyncConfig:
     Build SyncConfig from environment variables.
 
     Required: ATLAS_OPENWEBUI_URL, ATLAS_OPENWEBUI_EMAIL,
-              ATLAS_OPENWEBUI_PASSWORD, ATLAS_KNOWLEDGE_NAME.
+              ATLAS_OPENWEBUI_PASSWORD.
     Optional: ATLAS_PROCESS_TIMEOUT (default 300 seconds).
+
+    The knowledge_name field is left empty and must be set by the caller
+    from the CLI <project> argument.
 
     Raises EnvironmentError listing all missing variables.
     """
@@ -386,7 +432,6 @@ def load_sync_config() -> SyncConfig:
         "ATLAS_OPENWEBUI_URL": "Open WebUI base URL",
         "ATLAS_OPENWEBUI_EMAIL": "authentication email",
         "ATLAS_OPENWEBUI_PASSWORD": "authentication password",
-        "ATLAS_KNOWLEDGE_NAME": "target Knowledge Collection name",
     }
     missing = [k for k in required if not os.environ.get(k)]
     if missing:
@@ -397,7 +442,6 @@ def load_sync_config() -> SyncConfig:
         url=os.environ["ATLAS_OPENWEBUI_URL"].rstrip("/"),
         email=os.environ["ATLAS_OPENWEBUI_EMAIL"],
         password=os.environ["ATLAS_OPENWEBUI_PASSWORD"],
-        knowledge_name=os.environ["ATLAS_KNOWLEDGE_NAME"],
         process_timeout=int(os.environ.get("ATLAS_PROCESS_TIMEOUT", "300")),
     )
 
@@ -521,7 +565,7 @@ def http_post_multipart(
 
 
 # ---------------------------------------------------------------------------
-# M2.3 — Open WebUI API
+# M2.3 / M2.4 — Open WebUI API
 # ---------------------------------------------------------------------------
 
 
@@ -544,6 +588,30 @@ def authenticate(config: SyncConfig) -> str:
     return token
 
 
+def _parse_collections_response(url: str, data: object) -> list:
+    """
+    Extract the list of collections from an API response.
+
+    Accepts both a direct list (legacy) and a paginated dict
+    {"items": [...], "total": N} (Open WebUI v0.10.2+).
+    Raises RuntimeError on unexpected formats.
+    """
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        items = data.get("items")
+        if not isinstance(items, list):
+            raise RuntimeError(
+                f"Unexpected response from {url}: "
+                f"'items' is missing or not a list (got {type(items).__name__})."
+            )
+        return items
+    raise RuntimeError(
+        f"Unexpected response from {url}: "
+        f"expected list or dict, got {type(data).__name__}."
+    )
+
+
 def find_knowledge_collection(
     config: SyncConfig, token: str
 ) -> tuple[str, str]:
@@ -551,28 +619,11 @@ def find_knowledge_collection(
     Find a Knowledge Collection by exact name match.
 
     Returns (knowledge_id, knowledge_name).
-    Accepts both a legacy direct list and the paginated dict format
-    introduced in Open WebUI v0.10.2 ({"items": [...], "total": N}).
-    Raises RuntimeError if no collection matches ATLAS_KNOWLEDGE_NAME
+    Raises RuntimeError if no collection matches config.knowledge_name
     or if the API returns an unexpected format.
     """
     url = f"{config.url}/api/v1/knowledge/"
-    data = http_get(url, token)
-    if isinstance(data, list):
-        collections = data
-    elif isinstance(data, dict):
-        items = data.get("items")
-        if not isinstance(items, list):
-            raise RuntimeError(
-                f"Unexpected response from {url}: "
-                f"'items' is missing or not a list (got {type(items).__name__})."
-            )
-        collections = items
-    else:
-        raise RuntimeError(
-            f"Unexpected response from {url}: "
-            f"expected list or dict, got {type(data).__name__}."
-        )
+    collections = _parse_collections_response(url, http_get(url, token))
     for col in collections:
         if col.get("name") == config.knowledge_name:
             return col["id"], col["name"]
@@ -581,6 +632,49 @@ def find_knowledge_collection(
         f"Knowledge Collection '{config.knowledge_name}' not found.\n"
         f"Available: {available}"
     )
+
+
+def create_knowledge_collection(
+    config: SyncConfig, token: str
+) -> tuple[str, str]:
+    """
+    Create a new Knowledge Collection in Open WebUI.
+
+    Returns (knowledge_id, knowledge_name).
+    Raises RuntimeError if the response is missing required fields.
+    """
+    url = f"{config.url}/api/v1/knowledge/create"
+    data = http_post_json(
+        url,
+        {"name": config.knowledge_name, "description": ""},
+        token=token,
+    )
+    col_id = data.get("id")
+    col_name = data.get("name")
+    if not col_id or not col_name:
+        raise RuntimeError(
+            f"Create knowledge collection response missing 'id' or 'name'. "
+            f"Response: {data}"
+        )
+    return col_id, col_name
+
+
+def find_or_create_knowledge_collection(
+    config: SyncConfig, token: str
+) -> tuple[str, str]:
+    """
+    Find a Knowledge Collection by name; create it automatically if absent.
+
+    Returns (knowledge_id, knowledge_name).
+    Raises RuntimeError on API format errors or creation failure.
+    """
+    url = f"{config.url}/api/v1/knowledge/"
+    collections = _parse_collections_response(url, http_get(url, token))
+    for col in collections:
+        if col.get("name") == config.knowledge_name:
+            return col["id"], col["name"]
+    print(f"  Collection '{config.knowledge_name}' not found — creating ...")
+    return create_knowledge_collection(config, token)
 
 
 def upload_file(config: SyncConfig, token: str, file_path: Path) -> str:
@@ -715,7 +809,7 @@ def run_sync(
     index_path: Path,
 ) -> SyncStats:
     """
-    Authenticate, locate the Knowledge Collection, and sync all
+    Authenticate, locate (or create) the Knowledge Collection, and sync all
     documents returned True by needs_sync().
 
     Saves the index after each document to preserve progress if the
@@ -734,19 +828,22 @@ def run_sync(
         token = authenticate(config)
     except urllib.error.HTTPError as exc:
         print(f"Authentication failed: HTTP {exc.code}", file=sys.stderr)
+        stats.aborted = True
         return stats
-    except urllib.error.URLError as exc:
-        print(f"Cannot reach {config.url}: {exc.reason}", file=sys.stderr)
+    except (urllib.error.URLError, RuntimeError, ValueError) as exc:
+        print(f"Authentication failed: {exc}", file=sys.stderr)
+        stats.aborted = True
         return stats
 
     print(f"Locating Knowledge Collection '{config.knowledge_name}' ...")
     try:
-        knowledge_id, knowledge_name = find_knowledge_collection(config, token)
-    except RuntimeError as exc:
+        knowledge_id, knowledge_name = find_or_create_knowledge_collection(config, token)
+    except (RuntimeError, urllib.error.HTTPError, urllib.error.URLError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
+        stats.aborted = True
         return stats
 
-    print(f"Found: {knowledge_name} [{knowledge_id[:8]}...]")
+    print(f"Ready: {knowledge_name} [{knowledge_id[:8]}...]")
     print(f"Synchronizing {len(candidates)} document(s):\n")
 
     for doc in candidates:
@@ -848,31 +945,38 @@ def build_parser() -> argparse.ArgumentParser:
         prog="atlas-import",
         description=(
             "Atlas Knowledge Importer — "
-            "scan knowledge/, detect changes, sync to Open WebUI."
+            "scan knowledge/<PROJECT>/, detect changes, sync to Open WebUI."
         ),
     )
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument(
-        "--scan",
-        action="store_true",
-        help="Scan and detect changes. No HTTP calls. Updates the local index.",
+    sub = parser.add_subparsers(dest="command", metavar="command")
+    sub.required = True
+
+    _project_arg = dict(metavar="PROJECT", help="Project name (e.g. ABRAZO, NOEMA, ATLAS).")
+
+    p_scan = sub.add_parser(
+        "scan",
+        help="Scan and detect changes. No HTTP calls. Updates the local state.",
     )
-    group.add_argument(
-        "--sync",
-        action="store_true",
+    p_scan.add_argument("project", **_project_arg)
+
+    p_sync = sub.add_parser(
+        "sync",
         help=(
             "Scan then upload NEW, PENDING, and FAILED documents "
             "to the Open WebUI Knowledge Collection."
         ),
     )
-    group.add_argument(
-        "--dry-run",
-        action="store_true",
+    p_sync.add_argument("project", **_project_arg)
+
+    p_dry = sub.add_parser(
+        "dry-run",
         help=(
             "Show which documents would be synchronized. "
-            "No HTTP calls, no index update."
+            "No HTTP calls, no state update."
         ),
     )
+    p_dry.add_argument("project", **_project_arg)
+
     return parser
 
 
@@ -885,26 +989,30 @@ def main() -> int:
     """
     Entry point for the Atlas Knowledge Importer.
 
-    --scan / (no args): scan, detect changes, update index. No HTTP.
-    --dry-run:          scan, show sync candidates. No HTTP, no index update.
-    --sync:             scan, detect, sync NEW/PENDING/FAILED, update index.
+    scan   <PROJECT>: scan, detect changes, update state. No HTTP.
+    dry-run <PROJECT>: scan, show sync candidates. No HTTP, no state update.
+    sync   <PROJECT>: scan, detect, sync NEW/PENDING/FAILED, update state.
     """
     parser = build_parser()
     args = parser.parse_args()
 
+    project = args.project
+    name_error = validate_project_name(project)
+    if name_error:
+        print(f"Error: {name_error}", file=sys.stderr)
+        return 1
     project_root = find_project_root()
-    knowledge_dir = project_root / KNOWLEDGE_DIR
-    index_path = project_root / STATE_DIR / INDEX_FILE
+    knowledge_dir, index_path = resolve_project_paths(project_root, project)
 
     if not knowledge_dir.exists():
         print(
-            f"Error: '{KNOWLEDGE_DIR}/' not found at {knowledge_dir}",
+            f"Error: project '{project}' not found at {knowledge_dir}",
             file=sys.stderr,
         )
         return 1
     if not knowledge_dir.is_dir():
         print(
-            f"Error: '{KNOWLEDGE_DIR}' exists but is not a directory.",
+            f"Error: '{knowledge_dir}' exists but is not a directory.",
             file=sys.stderr,
         )
         return 1
@@ -914,10 +1022,10 @@ def main() -> int:
     detect_changes(result, index)
 
     # --- dry-run ---
-    if args.dry_run:
+    if args.command == "dry-run":
         candidates = [d for d in result.documents if needs_sync(d)]
         print()
-        print("Dry Run — documents that would be synchronized:")
+        print(f"Dry Run [{project}] — documents that would be synchronized:")
         print()
         if not candidates:
             print("  Nothing to synchronize.")
@@ -930,18 +1038,19 @@ def main() -> int:
         return 0
 
     # --- sync ---
-    if args.sync:
+    if args.command == "sync":
         try:
             config = load_sync_config()
         except EnvironmentError as exc:
             print(f"Configuration error:\n{exc}", file=sys.stderr)
             return 1
+        config.knowledge_name = project
         print()
         stats = run_sync(config, result, index_path)
         # Final save captures scan state even when nothing was synced
         save_index(index_path, result.documents)
         print_report(result, stats)
-        return 0 if (stats.failed == 0 and result.error_count == 0) else 1
+        return 0 if (not stats.aborted and stats.failed == 0 and result.error_count == 0) else 1
 
     # --- scan (default) ---
     print_report(result)

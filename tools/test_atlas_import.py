@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test suite for atlas-import.py — M2.3
+Test suite for atlas-import.py — M2.3 / M2.4 / M2.4.1
 
 Tests all logic functions in isolation without network calls or a live
 Open WebUI instance. HTTP functions are replaced by local stubs.
@@ -39,10 +39,8 @@ def check(name: str, condition: bool, detail: str = "") -> None:
 def test_missing_env_vars() -> None:
     print("\n1. Missing environment variables")
 
-    env_backup = {k: os.environ.pop(k, None) for k in [
-        "ATLAS_OPENWEBUI_URL", "ATLAS_OPENWEBUI_EMAIL",
-        "ATLAS_OPENWEBUI_PASSWORD", "ATLAS_KNOWLEDGE_NAME",
-    ]}
+    _required = ["ATLAS_OPENWEBUI_URL", "ATLAS_OPENWEBUI_EMAIL", "ATLAS_OPENWEBUI_PASSWORD"]
+    env_backup = {k: os.environ.pop(k, None) for k in _required}
     try:
         raised = False
         msg = ""
@@ -57,8 +55,7 @@ def test_missing_env_vars() -> None:
         # Only one missing
         os.environ["ATLAS_OPENWEBUI_URL"] = "http://example.com"
         os.environ["ATLAS_OPENWEBUI_EMAIL"] = "user@example.com"
-        os.environ["ATLAS_OPENWEBUI_PASSWORD"] = "secret"
-        # ATLAS_KNOWLEDGE_NAME still missing
+        # ATLAS_OPENWEBUI_PASSWORD still missing
         try:
             ai.load_sync_config()
             raised = False
@@ -66,24 +63,23 @@ def test_missing_env_vars() -> None:
             raised = True
             msg = str(exc)
         check("raises EnvironmentError for single missing var", raised)
-        check("message names the missing var", "ATLAS_KNOWLEDGE_NAME" in msg)
+        check("message names the missing var", "ATLAS_OPENWEBUI_PASSWORD" in msg)
 
-        # All present
-        os.environ["ATLAS_KNOWLEDGE_NAME"] = "Foundation"
+        # All present (knowledge_name set separately from CLI arg)
+        os.environ["ATLAS_OPENWEBUI_PASSWORD"] = "secret"
         cfg = ai.load_sync_config()
         check("returns SyncConfig when all vars present", cfg.url == "http://example.com")
         check("strips trailing slash from URL", not cfg.url.endswith("/"))
         check("default process_timeout is 300", cfg.process_timeout == 300)
+        check("knowledge_name is empty (set from CLI)", cfg.knowledge_name == "")
 
     finally:
-        # Restore
         for k, v in env_backup.items():
             if v is not None:
                 os.environ[k] = v
             else:
                 os.environ.pop(k, None)
-        for k in ["ATLAS_OPENWEBUI_URL", "ATLAS_OPENWEBUI_EMAIL",
-                   "ATLAS_OPENWEBUI_PASSWORD", "ATLAS_KNOWLEDGE_NAME"]:
+        for k in _required:
             os.environ.pop(k, None)
 
 
@@ -616,13 +612,435 @@ def test_knowledge_response_parsing() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 14. M2.4 — Multi-project
+# ---------------------------------------------------------------------------
+
+def test_project_not_found() -> None:
+    print("\n14. Multi-project: progetto inesistente")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        # knowledge/ABRAZO/ does not exist
+
+        with (
+            patch.object(ai, "find_project_root", return_value=root),
+            patch("sys.argv", ["atlas-import", "scan", "ABRAZO"]),
+        ):
+            rc = ai.main()
+
+        check("returns exit code 1 for non-existent project", rc == 1)
+
+
+def test_collection_already_exists() -> None:
+    print("\n   Collection già esistente (find_or_create non chiama create)")
+
+    cfg = ai.SyncConfig(
+        url="http://example.com", email="x", password="x",
+        knowledge_name="ABRAZO",
+    )
+    collections = [{"id": "id-abrazo", "name": "ABRAZO"}]
+    create_called = []
+
+    with (
+        patch.object(ai, "http_get", return_value=collections),
+        patch.object(
+            ai, "create_knowledge_collection",
+            side_effect=lambda *a, **kw: create_called.append(1) or ("new-id", "ABRAZO"),
+        ),
+    ):
+        kid, kname = ai.find_or_create_knowledge_collection(cfg, "token")
+
+    check("returns existing id", kid == "id-abrazo")
+    check("returns existing name", kname == "ABRAZO")
+    check("create_knowledge_collection not called", not create_called)
+
+
+def test_collection_auto_created() -> None:
+    print("\n   Collection da creare (find_or_create chiama create)")
+
+    cfg = ai.SyncConfig(
+        url="http://example.com", email="x", password="x",
+        knowledge_name="NOEMA",
+    )
+    existing = [{"id": "other-id", "name": "OTHER"}]
+
+    with (
+        patch.object(ai, "http_get", return_value=existing),
+        patch.object(ai, "http_post_json", return_value={"id": "noema-new-id", "name": "NOEMA"}),
+    ):
+        kid, kname = ai.find_or_create_knowledge_collection(cfg, "token")
+
+    check("auto-created: id returned", kid == "noema-new-id")
+    check("auto-created: name returned", kname == "NOEMA")
+
+
+def test_independent_state() -> None:
+    print("\n   Stato indipendente per progetto")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+
+        abrazo_dir, abrazo_idx = ai.resolve_project_paths(root, "ABRAZO")
+        noema_dir, noema_idx = ai.resolve_project_paths(root, "NOEMA")
+
+        check("ABRAZO knowledge dir ends with knowledge/ABRAZO",
+              str(abrazo_dir).endswith("knowledge/ABRAZO"))
+        check("NOEMA knowledge dir ends with knowledge/NOEMA",
+              str(noema_dir).endswith("knowledge/NOEMA"))
+        check("ABRAZO index ends with .state/ABRAZO.json",
+              str(abrazo_idx).endswith(".state/ABRAZO.json"))
+        check("NOEMA index ends with .state/NOEMA.json",
+              str(noema_idx).endswith(".state/NOEMA.json"))
+        check("index paths are different", abrazo_idx != noema_idx)
+
+        # Write state only for ABRAZO
+        abrazo_dir.mkdir(parents=True)
+        doc_path = abrazo_dir / "test.md"
+        doc_path.write_text("# Test\n\nContent.", encoding="utf-8")
+        doc = ai.DocumentInfo(
+            path=doc_path,
+            relative_path=Path("ABRAZO/test.md"),
+            filename="test.md", title="Test",
+            size_bytes=doc_path.stat().st_size,
+            modified=datetime.min, sha256="abc",
+            sync_status=ai.SYNC_SYNCED,
+        )
+        ai.save_index(abrazo_idx, [doc])
+
+        check("ABRAZO index created", abrazo_idx.exists())
+        check("NOEMA index not created", not noema_idx.exists())
+        check("NOEMA state loads as empty dict", ai.load_index(noema_idx) == {})
+
+
+def test_two_consecutive_projects() -> None:
+    print("\n   Sincronizzazione di due progetti consecutivi")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+
+        # Set up independent project dirs
+        for proj, fname in [("ABRAZO", "abrazo-doc.md"), ("NOEMA", "noema-doc.md")]:
+            proj_dir = root / "knowledge" / proj
+            proj_dir.mkdir(parents=True)
+            (proj_dir / fname).write_text(f"# {proj}\n\nContent.", encoding="utf-8")
+
+        # Scan + save state for each project independently
+        for proj in ("ABRAZO", "NOEMA"):
+            knowledge_dir, index_path = ai.resolve_project_paths(root, proj)
+            result = ai.scan_knowledge_dir(knowledge_dir)
+            ai.detect_changes(result, ai.load_index(index_path))
+            ai.save_index(index_path, result.documents)
+
+        _, abrazo_idx = ai.resolve_project_paths(root, "ABRAZO")
+        _, noema_idx = ai.resolve_project_paths(root, "NOEMA")
+
+        abrazo_state = ai.load_index(abrazo_idx)
+        noema_state = ai.load_index(noema_idx)
+
+        check("ABRAZO state has exactly 1 document", len(abrazo_state) == 1)
+        check("NOEMA state has exactly 1 document", len(noema_state) == 1)
+        check("ABRAZO state contains ABRAZO doc",
+              any("abrazo-doc" in k for k in abrazo_state))
+        check("NOEMA state contains NOEMA doc",
+              any("noema-doc" in k for k in noema_state))
+        check("ABRAZO state does not contain NOEMA doc",
+              not any("noema-doc" in k for k in abrazo_state))
+        check("NOEMA state does not contain ABRAZO doc",
+              not any("abrazo-doc" in k for k in noema_state))
+
+
+# ---------------------------------------------------------------------------
+# 15. M2.4.1 — Hardening: abort su errori fatali + validazione PROJECT
+# ---------------------------------------------------------------------------
+
+def _make_new_doc(tmp_path: Path) -> ai.DocumentInfo:
+    """Helper: DocumentInfo with STATUS_NEW backed by a real temp file."""
+    tmp_path.write_text("# Test\n\nContent.", encoding="utf-8")
+    return ai.DocumentInfo(
+        path=tmp_path,
+        relative_path=Path("ABRAZO") / tmp_path.name,
+        filename=tmp_path.name,
+        title="Test",
+        size_bytes=tmp_path.stat().st_size,
+        modified=datetime.min,
+        sha256="abc",
+        status=ai.STATUS_NEW,
+    )
+
+
+def test_abort_on_auth_failure() -> None:
+    print("\n15. M2.4.1 — Abort su errori fatali")
+
+    cfg = ai.SyncConfig(
+        url="http://example.com", email="x", password="x", knowledge_name="ABRAZO"
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        index_path = Path(tmpdir) / "ABRAZO.json"
+        doc = _make_new_doc(Path(tmpdir) / "doc.md")
+        result = ai.ScanResult(documents=[doc], new_count=1)
+
+        # HTTPError 401
+        def raise_401(*a, **kw):
+            raise urllib.error.HTTPError(cfg.url, 401, "Unauthorized", {}, None)
+
+        with patch.object(ai, "http_post_json", side_effect=raise_401):
+            stats = ai.run_sync(cfg, result, index_path)
+
+        check("auth HTTPError → stats.aborted", stats.aborted)
+        check("auth HTTPError → uploaded == 0", stats.uploaded == 0)
+
+        # URLError (rete irraggiungibile)
+        doc.sync_status = ai.SYNC_PENDING
+        doc.status = ai.STATUS_NEW
+
+        def raise_url(*a, **kw):
+            raise urllib.error.URLError("unreachable")
+
+        with patch.object(ai, "http_post_json", side_effect=raise_url):
+            stats2 = ai.run_sync(cfg, result, index_path)
+
+        check("auth URLError → stats.aborted", stats2.aborted)
+
+        # RuntimeError (no token in response)
+        doc.sync_status = ai.SYNC_PENDING
+        doc.status = ai.STATUS_NEW
+
+        with patch.object(ai, "http_post_json", return_value={"user": "x"}):
+            stats3 = ai.run_sync(cfg, result, index_path)
+
+        check("auth RuntimeError (no token) → stats.aborted", stats3.aborted)
+
+
+def test_abort_on_collection_lookup_failure() -> None:
+    print("\n   Abort: collection lookup fallito")
+
+    cfg = ai.SyncConfig(
+        url="http://example.com", email="x", password="x", knowledge_name="ABRAZO"
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        index_path = Path(tmpdir) / "ABRAZO.json"
+        doc = _make_new_doc(Path(tmpdir) / "doc.md")
+        result = ai.ScanResult(documents=[doc], new_count=1)
+
+        # auth OK, GET /knowledge/ → URLError
+        with (
+            patch.object(ai, "http_post_json", return_value={"token": "tok"}),
+            patch.object(ai, "http_get",
+                         side_effect=urllib.error.URLError("connection refused")),
+        ):
+            stats = ai.run_sync(cfg, result, index_path)
+
+        check("collection URLError → stats.aborted", stats.aborted)
+        check("collection URLError → uploaded == 0", stats.uploaded == 0)
+
+        # auth OK, GET /knowledge/ → malformed dict (no items)
+        doc.sync_status = ai.SYNC_PENDING
+        doc.status = ai.STATUS_NEW
+
+        with (
+            patch.object(ai, "http_post_json", return_value={"token": "tok"}),
+            patch.object(ai, "http_get", return_value={"total": 0}),
+        ):
+            stats2 = ai.run_sync(cfg, result, index_path)
+
+        check("collection bad format → stats.aborted", stats2.aborted)
+
+
+def test_abort_on_collection_create_failure() -> None:
+    print("\n   Abort: collection creation fallita")
+
+    cfg = ai.SyncConfig(
+        url="http://example.com", email="x", password="x", knowledge_name="NOEMA"
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        index_path = Path(tmpdir) / "NOEMA.json"
+        doc = _make_new_doc(Path(tmpdir) / "doc.md")
+        result = ai.ScanResult(documents=[doc], new_count=1)
+
+        # auth OK → find returns empty list → create → 500
+        create_error = urllib.error.HTTPError(
+            cfg.url, 500, "Internal Server Error", {}, None
+        )
+
+        with (
+            patch.object(ai, "http_post_json",
+                         side_effect=[{"token": "tok"}, create_error]),
+            patch.object(ai, "http_get", return_value=[]),
+        ):
+            stats = ai.run_sync(cfg, result, index_path)
+
+        check("create HTTPError 500 → stats.aborted", stats.aborted)
+        check("create HTTPError 500 → uploaded == 0", stats.uploaded == 0)
+
+        # auth OK → find returns empty → create returns no id
+        doc.sync_status = ai.SYNC_PENDING
+        doc.status = ai.STATUS_NEW
+
+        with (
+            patch.object(ai, "http_post_json",
+                         side_effect=[{"token": "tok"}, {"name": "NOEMA"}]),
+            patch.object(ai, "http_get", return_value=[]),
+        ):
+            stats2 = ai.run_sync(cfg, result, index_path)
+
+        check("create missing id → stats.aborted", stats2.aborted)
+
+
+def test_project_name_validation() -> None:
+    print("\n   Validazione nome PROJECT")
+
+    valid = ["ABRAZO", "NOEMA", "ATLAS", "A", "Z9", "MY-PROJECT", "MY_PROJECT", "A1B"]
+    for name in valid:
+        check(f"valido: '{name}'", ai.validate_project_name(name) is None)
+
+    invalid = [
+        ("",              "vuoto"),
+        ("../SECRETS",    "path traversal con ../"),
+        ("ABRAZO/sub",    "slash"),
+        ("MY PROJECT",    "spazio"),
+        ("abrazo",        "lowercase"),
+        ("_ABRAZO",       "inizia con underscore"),
+        ("-ABRAZO",       "inizia con trattino"),
+        ("A" * 65,        "troppo lungo (65 car.)"),
+        ("ABRAZO.",       "punto"),
+        ("ABRAZO\n",      "newline"),
+    ]
+    for name, desc in invalid:
+        check(
+            f"non valido: {desc!r}",
+            ai.validate_project_name(name) is not None,
+        )
+
+
+def test_main_rejects_invalid_project() -> None:
+    print("\n   main() rifiuta PROJECT non valido → exit 1")
+
+    for bad in ("../secrets", "abrazo", "MY PROJECT", ""):
+        with patch("sys.argv", ["atlas-import", "scan", bad] if bad else ["atlas-import", "scan", bad]):
+            # argparse requires a non-empty positional; empty string is tricky
+            if not bad:
+                # argparse would print usage and exit(2) for truly missing arg
+                # test validate_project_name directly instead
+                check("vuoto: validate_project_name restituisce errore",
+                      ai.validate_project_name(bad) is not None)
+                continue
+            rc = ai.main()
+        check(f"main() → 1 per PROJECT='{bad}'", rc == 1)
+
+
+# ---------------------------------------------------------------------------
+# 16. M2.4.1 — ValueError da risposta non JSON
+# ---------------------------------------------------------------------------
+
+def test_abort_on_auth_non_json() -> None:
+    print("\n16. M2.4.1 — ValueError: risposta non JSON")
+
+    cfg = ai.SyncConfig(
+        url="http://example.com", email="x", password="x", knowledge_name="ABRAZO"
+    )
+    collection_called = []
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        index_path = Path(tmpdir) / "ABRAZO.json"
+        doc = _make_new_doc(Path(tmpdir) / "doc.md")
+        result = ai.ScanResult(documents=[doc], new_count=1)
+
+        def fake_http_get_spy(url, token):
+            collection_called.append(url)
+            return []
+
+        with (
+            patch.object(ai, "http_post_json",
+                         side_effect=ValueError("Non-JSON response from signin: b'<html>'")),
+            patch.object(ai, "http_get", side_effect=fake_http_get_spy),
+        ):
+            stats = ai.run_sync(cfg, result, index_path)
+
+        check("auth ValueError → stats.aborted", stats.aborted)
+        check("auth ValueError → uploaded == 0", stats.uploaded == 0)
+        check("auth ValueError → collection lookup non eseguito", not collection_called)
+
+
+def test_abort_on_collection_non_json() -> None:
+    print("\n   ValueError durante lookup collection")
+
+    cfg = ai.SyncConfig(
+        url="http://example.com", email="x", password="x", knowledge_name="ABRAZO"
+    )
+    upload_called = []
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        index_path = Path(tmpdir) / "ABRAZO.json"
+        doc = _make_new_doc(Path(tmpdir) / "doc.md")
+        result = ai.ScanResult(documents=[doc], new_count=1)
+
+        def fake_upload_spy(*a, **kw):
+            upload_called.append(1)
+            return {"id": "file-xyz"}
+
+        with (
+            patch.object(ai, "http_post_json", return_value={"token": "tok"}),
+            patch.object(ai, "http_get",
+                         side_effect=ValueError("Non-JSON response from /knowledge/: b'<html>'")),
+            patch.object(ai, "http_post_multipart", side_effect=fake_upload_spy),
+        ):
+            stats = ai.run_sync(cfg, result, index_path)
+
+        check("collection ValueError → stats.aborted", stats.aborted)
+        check("collection ValueError → uploaded == 0", stats.uploaded == 0)
+        check("collection ValueError → nessun upload documento", not upload_called)
+
+
+def test_main_exit1_on_non_json() -> None:
+    print("\n   main() → exit 1 su ValueError")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        proj_dir = root / "knowledge" / "ABRAZO"
+        proj_dir.mkdir(parents=True)
+        (proj_dir / "doc.md").write_text("# Doc\n\nContent.", encoding="utf-8")
+
+        env = {
+            "ATLAS_OPENWEBUI_URL": "http://example.com",
+            "ATLAS_OPENWEBUI_EMAIL": "x@x.com",
+            "ATLAS_OPENWEBUI_PASSWORD": "secret",
+        }
+
+        # ValueError su autenticazione
+        with (
+            patch.object(ai, "find_project_root", return_value=root),
+            patch("sys.argv", ["atlas-import", "sync", "ABRAZO"]),
+            patch.dict(os.environ, env),
+            patch.object(ai, "http_post_json",
+                         side_effect=ValueError("Non-JSON response: b'<html>'")),
+        ):
+            rc = ai.main()
+        check("main() → 1 su auth ValueError", rc == 1)
+
+        # ValueError su collection lookup
+        with (
+            patch.object(ai, "find_project_root", return_value=root),
+            patch("sys.argv", ["atlas-import", "sync", "ABRAZO"]),
+            patch.dict(os.environ, env),
+            patch.object(ai, "http_post_json", return_value={"token": "tok"}),
+            patch.object(ai, "http_get",
+                         side_effect=ValueError("Non-JSON response: b'<html>'")),
+        ):
+            rc2 = ai.main()
+        check("main() → 1 su collection ValueError", rc2 == 1)
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
 
 def main() -> int:
     print("=" * 60)
-    print("Atlas Import — Test Suite (M2.3)")
+    print("Atlas Import — Test Suite (M2.3 / M2.4 / M2.4.1)")
     print("=" * 60)
 
     test_missing_env_vars()
@@ -640,6 +1058,19 @@ def main() -> int:
     test_atomic_index_write()
     test_needs_sync_rules()
     test_knowledge_response_parsing()
+    test_project_not_found()
+    test_collection_already_exists()
+    test_collection_auto_created()
+    test_independent_state()
+    test_two_consecutive_projects()
+    test_abort_on_auth_failure()
+    test_abort_on_collection_lookup_failure()
+    test_abort_on_collection_create_failure()
+    test_project_name_validation()
+    test_main_rejects_invalid_project()
+    test_abort_on_auth_non_json()
+    test_abort_on_collection_non_json()
+    test_main_exit1_on_non_json()
 
     passed = sum(1 for _, ok, _ in _results if ok)
     failed = sum(1 for _, ok, _ in _results if not ok)
