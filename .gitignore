@@ -5,3 +5,5 @@ __pycache__/
 .env
 secrets/
 .claude/
+benchmark/results/*
+!benchmark/results/.gitkeep

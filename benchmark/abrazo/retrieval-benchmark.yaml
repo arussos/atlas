@@ -1,0 +1,572 @@
+# ABRAZO — Retrieval Benchmark Dataset
+# Versione: 1.1.0 | Progetto: ABRAZO | Creato: 2026-07-12 | Normalizzato: 2026-07-12
+#
+# Domande basate esclusivamente sui documenti presenti in knowledge/ABRAZO/.
+# Non inventare informazioni. Ogni expected_documents punta a file reali.
+#
+# Categorie: ARCHITECTURE DATABASE API SECURITY DEPLOYMENT
+#            BUSINESS_RULES PRICING CHECKIN GDPR CROSS_DOCUMENT ROADMAP
+#
+# Schema per ogni domanda (tutti i campi obbligatori):
+#   id, category, question, expected_documents, must_contain, must_not_contain, notes
+
+questions:
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # ARCHITECTURE
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  - id: ABR-ARCH-001
+    category: ARCHITECTURE
+    question: "Qual è il formato esatto del payload del QR code generato da ABRAZO per un partecipante a un evento?"
+    expected_documents:
+      - 01_ARCHITECTURE.md
+      - CLAUDE.md
+    must_contain:
+      - ABRAZO:EVP
+      - EVP-
+    must_not_contain:
+      - PII
+      - email
+    notes: "Il formato opaco ABRAZO:EVP:EVP-XXXXXX è centrale per il GDPR e per il check-in. Il retriever deve trovare la specifica esatta del payload."
+
+  - id: ABR-ARCH-002
+    category: ARCHITECTURE
+    question: "Quali sono le dipendenze frontend principali di ABRAZO con le loro versioni?"
+    expected_documents:
+      - 01_ARCHITECTURE.md
+      - CLAUDE.md
+    must_contain:
+      - Next.js
+      - React 19
+      - TypeScript 5
+      - Tailwind 4
+      - Supabase
+    must_not_contain: []
+    notes: "Verifica che il retriever recuperi la sezione stack tecnico con le versioni specifiche, non solo nomi generici."
+
+  - id: ABR-ARCH-003
+    category: ARCHITECTURE
+    question: "Qual è la differenza tra il client Supabase anon e il client service role in ABRAZO?"
+    expected_documents:
+      - 01_ARCHITECTURE.md
+      - CLAUDE.md
+    must_contain:
+      - anon
+      - service role
+      - browser
+      - server
+    must_not_contain: []
+    notes: "La distinzione anon/service-role è critica per la sicurezza. Il retriever deve trovare la spiegazione del perché si usano due client diversi."
+
+  - id: ABR-ARCH-004
+    category: ARCHITECTURE
+    question: "ABRAZO usa un approccio mobile-first? Come viene implementato nel frontend?"
+    expected_documents:
+      - 01_ARCHITECTURE.md
+      - CLAUDE.md
+    must_contain:
+      - mobile-first
+      - Tailwind
+    must_not_contain: []
+    notes: "Domanda semplice che verifica il recupero del principio di design dichiarato nell'architettura."
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # DATABASE
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  - id: ABR-DB-001
+    category: DATABASE
+    question: "Qual è il percorso esatto del file PNG del QR code in Supabase Storage?"
+    expected_documents:
+      - 02_DATABASE.md
+      - CLAUDE.md
+    must_contain:
+      - registration-qr
+      - events/
+      - event-participants/
+    must_not_contain: []
+    notes: "Il percorso strutturato events/{event_id}/event-participants/{participant_id}.png deve essere recuperato esattamente."
+
+  - id: ABR-DB-002
+    category: DATABASE
+    question: "Quali sono i possibili stati del campo payment_status per un event_participant e in quale ordine si succedono?"
+    expected_documents:
+      - 02_DATABASE.md
+      - CLAUDE.md
+    must_contain:
+      - pending
+      - deposit
+      - paid
+    must_not_contain: []
+    notes: "La macchina a stati pending → deposit → paid è fondamentale per la segreteria."
+
+  - id: ABR-DB-003
+    category: DATABASE
+    question: "Quali tabelle di ABRAZO contengono la tabella event_participant_audit e che tipo di eventi registra?"
+    expected_documents:
+      - 02_DATABASE.md
+      - CLAUDE.md
+    must_contain:
+      - event_participant_audit
+      - event_type
+      - registration_created
+    must_not_contain: []
+    notes: "Verifica che il retriever trovi sia la struttura della tabella sia i tipi di eventi registrati nell'audit trail."
+
+  - id: ABR-DB-004
+    category: DATABASE
+    question: "Quali sono i campi principali della tabella registration_payments e qual è la sua invariante fondamentale?"
+    expected_documents:
+      - ADR-001-registration-payment-ledger.md
+    must_contain:
+      - registration_payments
+      - event_participant_id
+      - amount
+      - payment_type
+      - outstanding
+    must_not_contain: []
+    notes: "Questa tabella è documentata nell'ADR-001, non nel documento DATABASE principale. Testa se il retriever copre anche i documenti ADR."
+
+  - id: ABR-DB-005
+    category: DATABASE
+    question: "Perché la tabella registration_payments include un campo event_id anche se questo dato è derivabile da event_participant_id?"
+    expected_documents:
+      - ADR-001-registration-payment-ledger.md
+    must_contain:
+      - denormalizzazione
+      - event_id
+      - reporting
+    must_not_contain: []
+    notes: "Domanda architetturale che testa la capacità del retriever di trovare la motivazione di una scelta di design nell'ADR."
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # API
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  - id: ABR-API-001
+    category: API
+    question: "Quanti fogli contiene il file Excel esportato dall'admin di ABRAZO e come si chiamano?"
+    expected_documents:
+      - 03_API_AND_FLOWS.md
+      - CLAUDE.md
+    must_contain:
+      - Iscrizioni
+      - Attività
+      - Riepilogo
+    must_not_contain: []
+    notes: "Verifica il recupero della specifica dell'export Excel con i nomi esatti dei tre fogli."
+
+  - id: ABR-API-002
+    category: API
+    question: "Qual è il formato del codice partecipante usato nel flusso di iscrizione legacy di ABRAZO?"
+    expected_documents:
+      - 03_API_AND_FLOWS.md
+      - CLAUDE.md
+    must_contain:
+      - ABR-
+      - legacy
+      - /api/registrations
+    must_not_contain: []
+    notes: "Il codice ABR-XXXXXX è distinto dal QR EVP-XXXXXX. Il retriever deve trovare la distinzione tra flusso moderno e legacy."
+
+  - id: ABR-API-003
+    category: API
+    question: "Quali sono le operazioni principali eseguite dalla POST /api/event-participants durante una nuova iscrizione?"
+    expected_documents:
+      - 03_API_AND_FLOWS.md
+      - CLAUDE.md
+    must_contain:
+      - event-participants
+      - QR
+      - email
+      - Storage
+    must_not_contain: []
+    notes: "La sequenza di 11 passi deve essere recuperata. Il retriever deve trovare che include upload QR, invio email e salvataggio su Storage."
+
+  - id: ABR-API-004
+    category: API
+    question: "Come funzionano gli endpoint di check-in per evento e per attività? Qual è la differenza tra i due?"
+    expected_documents:
+      - 03_API_AND_FLOWS.md
+      - CLAUDE.md
+    must_contain:
+      - /api/checkin/event
+      - /api/checkin/activity
+      - checkin_type
+    must_not_contain: []
+    notes: "I due endpoint di check-in hanno semantica diversa. Il retriever deve trovare entrambi e la loro differenza funzionale."
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # SECURITY
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  - id: ABR-SEC-001
+    category: SECURITY
+    question: "Quanti layer di sicurezza ha ABRAZO e dove è implementato ciascuno?"
+    expected_documents:
+      - 05_ROADMAP.md
+      - CLAUDE.md
+    must_contain:
+      - proxy
+      - requireRole
+      - getCurrentStaff
+      - RLS
+    must_not_contain: []
+    notes: "L'architettura a 4 layer (proxy, Server Actions, API Routes, RLS) è descritta nella roadmap MVP 0.9.8."
+
+  - id: ABR-SEC-002
+    category: SECURITY
+    question: "Quali sono i quattro ruoli staff di ABRAZO e a quali funzioni ha accesso ciascuno?"
+    expected_documents:
+      - 05_ROADMAP.md
+      - CLAUDE.md
+    must_contain:
+      - super_admin
+      - segreteria
+      - direzione
+      - checkin
+    must_not_contain: []
+    notes: "La tabella dei ruoli è presente nella roadmap. Il retriever deve trovare i quattro ruoli con i relativi permessi."
+
+  - id: ABR-SEC-003
+    category: SECURITY
+    question: "Come è protetto l'accesso alla sezione amministrativa /admin/* in ABRAZO?"
+    expected_documents:
+      - 05_ROADMAP.md
+      - CLAUDE.md
+    must_contain:
+      - proxy
+      - getClaims
+      - /login
+      - redirect
+    must_not_contain: []
+    notes: "Il proxy Next.js che legge i cookie di sessione con getClaims() è il primo layer di difesa."
+
+  - id: ABR-SEC-004
+    category: SECURITY
+    question: "Su quante tabelle è attivata la Row Level Security in ABRAZO e qual è la policy applicata?"
+    expected_documents:
+      - 05_ROADMAP.md
+      - CLAUDE.md
+    must_contain:
+      - RLS
+      - 10 tabelle
+      - service role
+    must_not_contain: []
+    notes: "RLS attivata su 10 tabelle senza policy pubblica — l'accesso avviene solo tramite service role. Verifica che il retriever trovi il numero esatto."
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # DEPLOYMENT
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  - id: ABR-DEP-001
+    category: DEPLOYMENT
+    question: "Su quali piattaforme è deployato ABRAZO in produzione?"
+    expected_documents:
+      - 01_ARCHITECTURE.md
+      - CLAUDE.md
+    must_contain:
+      - Vercel
+      - Supabase
+      - Resend
+    must_not_contain: []
+    notes: "Le tre piattaforme (frontend Vercel, backend Supabase, email Resend) devono essere recuperate."
+
+  - id: ABR-DEP-002
+    category: DEPLOYMENT
+    question: "Quale indirizzo email viene usato per inviare le email di conferma iscrizione in ambiente di sviluppo e perché è un problema per la produzione?"
+    expected_documents:
+      - 01_ARCHITECTURE.md
+      - CLAUDE.md
+    must_contain:
+      - onboarding@resend.dev
+      - produzione
+      - dominio
+    must_not_contain: []
+    notes: "Il sender dev onboarding@resend.dev non è adatto alla produzione. Testa se il retriever trova il debito tecnico specifico."
+
+  - id: ABR-DEP-003
+    category: DEPLOYMENT
+    question: "Quali configurazioni DNS sono necessarie per il dominio email di produzione di ABRAZO?"
+    expected_documents:
+      - 05_ROADMAP.md
+    must_contain:
+      - SPF
+      - DKIM
+      - DMARC
+      - Resend
+    must_not_contain: []
+    notes: "La milestone M3 della roadmap descrive i tre record DNS necessari per la deliverability."
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # BUSINESS_RULES
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  - id: ABR-BIZ-001
+    category: BUSINESS_RULES
+    question: "Qual è il principio invariante che governa il QR code di ABRAZO rispetto al pagamento del partecipante?"
+    expected_documents:
+      - 05_ROADMAP.md
+      - CLAUDE.md
+    must_contain:
+      - identità
+      - pagamento
+      - QR
+    must_not_contain: []
+    notes: "DL-11: il QR è identificatore di identità, non di pagamento. Principio fondamentale che non deve essere violato dalle evoluzioni del check-in."
+
+  - id: ABR-BIZ-002
+    category: BUSINESS_RULES
+    question: "Quali sono i tipi di pagamento che possono essere registrati in registration_payments?"
+    expected_documents:
+      - ADR-001-registration-payment-ledger.md
+    must_contain:
+      - deposit
+      - balance
+      - supplement
+      - adjustment
+    must_not_contain: []
+    notes: "I quattro payment_type coprono l'intero dominio economico. Il retriever deve trovare tutti e quattro con le loro definizioni."
+
+  - id: ABR-BIZ-003
+    category: BUSINESS_RULES
+    question: "Cosa succede alle note operative della segreteria rispetto ai pagamenti in ABRAZO? Dove vengono archiviate?"
+    expected_documents:
+      - ADR-001-registration-payment-ledger.md
+      - CLAUDE.md
+    must_contain:
+      - staff_note
+      - event_participant_audit
+      - description
+    must_not_contain: []
+    notes: "L'ADR distingue il campo description (documento del pagamento) dalle note operative (staff_note in audit). Testa la comprensione di questa separazione."
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # PRICING
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  - id: ABR-PRC-001
+    category: PRICING
+    question: "Quale percentuale viene applicata di default per il calcolo dell'acconto in ABRAZO?"
+    expected_documents:
+      - 01_ARCHITECTURE.md
+      - CLAUDE.md
+    must_contain:
+      - 70%
+      - acconto
+      - deposit
+    must_not_contain: []
+    notes: "Il 70% di default è specificato nell'architettura come valore standard, modificabile per pacchetto."
+
+  - id: ABR-PRC-002
+    category: PRICING
+    question: "Quale vulnerabilità esiste nel calcolo dei prezzi dell'attuale implementazione di ABRAZO?"
+    expected_documents:
+      - 01_ARCHITECTURE.md
+      - CLAUDE.md
+      - 05_ROADMAP.md
+    must_contain:
+      - totalAmount
+      - client
+      - server
+    must_not_contain: []
+    notes: "DT-DB-02: il server accetta i totali calcolati dal client senza ricalcolare. La milestone M2 prevede la correzione lato server."
+
+  - id: ABR-PRC-003
+    category: PRICING
+    question: "Da quali campi del database vengono calcolati il totale, l'acconto e il saldo di un'iscrizione?"
+    expected_documents:
+      - 02_DATABASE.md
+      - CLAUDE.md
+    must_contain:
+      - packages.price
+      - deposit_amount
+      - event_activities
+    must_not_contain: []
+    notes: "I campi specifici packages.price, deposit_amount, price_amount di event_activities devono essere recuperati."
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # CHECKIN
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  - id: ABR-CHK-001
+    category: CHECKIN
+    question: "Quali sono i due tipi di check-in supportati da ABRAZO e qual è la differenza?"
+    expected_documents:
+      - 03_API_AND_FLOWS.md
+      - CLAUDE.md
+    must_contain:
+      - event
+      - activity
+      - checkin_type
+    must_not_contain: []
+    notes: "Il check-in evento e il check-in per singola attività hanno logiche diverse (verifica prenotazione per attività)."
+
+  - id: ABR-CHK-002
+    category: CHECKIN
+    question: "Come può un operatore eseguire il check-in di un partecipante quando la fotocamera dello scanner QR non è disponibile?"
+    expected_documents:
+      - 05_ROADMAP.md
+      - CLAUDE.md
+    must_contain:
+      - manuale
+      - payload
+    must_not_contain: []
+    notes: "L'input manuale del payload come fallback allo scanner QR è una funzionalità esplicita descritta nella roadmap."
+
+  - id: ABR-CHK-003
+    category: CHECKIN
+    question: "Come previene ABRAZO i check-in duplicati per lo stesso partecipante allo stesso evento?"
+    expected_documents:
+      - 03_API_AND_FLOWS.md
+      - CLAUDE.md
+    must_contain:
+      - duplicati
+      - checkin
+    must_not_contain: []
+    notes: "La prevenzione dei check-in duplicati è una feature esplicita. Il retriever deve trovare come viene implementata."
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # GDPR
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  - id: ABR-GDPR-001
+    category: GDPR
+    question: "Quali sono i tre consensi GDPR raccolti da ABRAZO durante la registrazione e come vengono conservati?"
+    expected_documents:
+      - 04_GDPR_AND_SECURITY.md
+      - CLAUDE.md
+    must_contain:
+      - privacy_accepted
+      - terms_accepted
+      - media_accepted
+      - _at
+    must_not_contain: []
+    notes: "I tre consensi con i rispettivi timestamp _at devono essere recuperati. Verifica che il retriever trovi anche la struttura di conservazione."
+
+  - id: ABR-GDPR-002
+    category: GDPR
+    question: "Perché il QR code di ABRAZO viene definito 'non parlante' e quali dati personali contiene?"
+    expected_documents:
+      - 04_GDPR_AND_SECURITY.md
+      - CLAUDE.md
+    must_contain:
+      - non parlante
+      - PII
+      - opaco
+    must_not_contain: []
+    notes: "Il concetto di QR non parlante (zero PII nel payload) è centrale per la conformità GDPR."
+
+  - id: ABR-GDPR-003
+    category: GDPR
+    question: "Come gestisce ABRAZO il diritto all'oblio di un partecipante? Qual è la differenza tra anonimizzazione e cancellazione?"
+    expected_documents:
+      - 04_GDPR_AND_SECURITY.md
+      - CLAUDE.md
+    must_contain:
+      - anonimizzazione
+      - cancellazione
+      - audit
+    must_not_contain: []
+    notes: "La distinzione tra anonimizzare (preserva l'audit trail) e cancellare (viola l'immutabilità) è una scelta architetturale documentata."
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # CROSS_DOCUMENT
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  - id: ABR-CROSS-001
+    category: CROSS_DOCUMENT
+    question: "Come viene tracciato nell'audit trail l'operatore che ha eseguito un check-in? Quale dato viene registrato?"
+    expected_documents:
+      - 03_API_AND_FLOWS.md
+      - 05_ROADMAP.md
+      - CLAUDE.md
+    must_contain:
+      - checked_in_by
+      - email
+      - operatore
+    must_not_contain: []
+    notes: "La risposta richiede incrociare la struttura dell'API (checked_in_by) con il contesto della security (email reale dell'operatore autenticato)."
+
+  - id: ABR-CROSS-002
+    category: CROSS_DOCUMENT
+    question: "Quali operazioni avvengono in sequenza quando la segreteria conferma il pagamento completo di un partecipante?"
+    expected_documents:
+      - ADR-001-registration-payment-ledger.md
+      - CLAUDE.md
+    must_contain:
+      - registration_payments
+      - payment_status
+      - email
+      - audit
+    must_not_contain: []
+    notes: "La conferma pagamento esegue INSERT in registration_payments, UPDATE su event_participants e invio email. Richiede sia l'ADR che la documentazione della segreteria."
+
+  - id: ABR-CROSS-003
+    category: CROSS_DOCUMENT
+    question: "Come si integra il sistema QR con i requisiti GDPR? Perché la scelta del formato opaco protegge i partecipanti?"
+    expected_documents:
+      - 01_ARCHITECTURE.md
+      - 04_GDPR_AND_SECURITY.md
+      - CLAUDE.md
+    must_contain:
+      - ABRAZO:EVP
+      - PII
+      - minimo indispensabile
+    must_not_contain: []
+    notes: "Domanda trasversale che richiede collegare la specifica tecnica del QR (01_ARCHITECTURE) con la motivazione GDPR (04_GDPR)."
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # ROADMAP
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  - id: ABR-ROAD-001
+    category: ROADMAP
+    question: "Qual è la versione attuale di ABRAZO e quali funzionalità di sicurezza sono state completate nell'ultima release?"
+    expected_documents:
+      - 05_ROADMAP.md
+    must_contain:
+      - 0.9.8
+      - Security Foundation
+      - RLS
+    must_not_contain: []
+    notes: "La versione MVP 0.9.8 con la Security Foundation (proxy, Server Actions, API Routes, RLS) deve essere recuperata."
+
+  - id: ABR-ROAD-002
+    category: ROADMAP
+    question: "Cosa prevede la milestone M2 della roadmap di ABRAZO e perché è necessaria?"
+    expected_documents:
+      - 05_ROADMAP.md
+    must_contain:
+      - M2
+      - prezzi
+      - server
+      - client
+    must_not_contain: []
+    notes: "M2 prevede il ricalcolo server-side dei prezzi per eliminare la fiducia nei valori inviati dal client (DT-DB-02)."
+
+  - id: ABR-ROAD-003
+    category: ROADMAP
+    question: "Quali passi sono necessari per generalizzare ABRAZO alla gestione di eventi multipli tramite slug?"
+    expected_documents:
+      - 05_ROADMAP.md
+    must_contain:
+      - slug
+      - /register/[slug]
+      - parametrico
+    must_not_contain: []
+    notes: "La sezione §5 della roadmap descrive i quattro passi per la generalizzazione multi-evento."
+
+  - id: ABR-ROAD-004
+    category: ROADMAP
+    question: "Quali tabelle sono presenti nel codice di ABRAZO ma assenti dalla migration Supabase 001_init_abrazo_schema.sql?"
+    expected_documents:
+      - 05_ROADMAP.md
+    must_contain:
+      - event_participants
+      - event_participant_audit
+      - staff
+      - migration
+    must_not_contain: []
+    notes: "Il debito tecnico §4c descrive esplicitamente le tabelle mancanti dalla migration. Testa il recupero di questa sezione specifica della roadmap."
