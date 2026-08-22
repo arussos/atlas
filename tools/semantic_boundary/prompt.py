@@ -17,36 +17,81 @@ from tools.semantic_boundary.models import SemanticResolutionRequest
 # Testo di istruzione statico e deterministico. In inglese per convenzione
 # Atlas (testo tecnico di prompt in inglese, vedi CLAUDE.md/istruzioni
 # M4.2b). Deliberatamente privo di esempi few-shot o di tuning contro il
-# Gold Pilot: quel tuning è esplicitamente fuori scope per M4.2b-A.
+# Gold Pilot: quel tuning è esplicitamente fuori scope per M4.2b-A/C.
+#
+# v0.2 (M4.2b-C): stessa struttura generale di v0.1, con una definizione
+# più operativa di EPISODE (unit of work, non project/topic/system) e una
+# sezione esplicita su candidate_score per prevenire confidence anchoring.
+# Nessun esempio derivato dal Gold Pilot: vedi
+# docs/M4.2B_SEMANTIC_BOUNDARY_RESOLVER.md, sezione M4.2b-C, §6.
 TASK_INSTRUCTION = """\
 TASK:
 Determine whether the two sides of this candidate transition belong to the \
 SAME_EPISODE, a BOUNDARY, or are UNCERTAIN.
 
+DEFINITION OF EPISODE:
+An episode is a coherent operational work unit centered on one concrete \
+task, problem, decision, investigation, or deliverable. It is defined by \
+what is being worked on, not by the surrounding project, customer, \
+system, technology, or general topic.
+
 DEFINITION OF SAME_EPISODE:
-Same coherent professional task, problem, decision, or deliverable, \
+The two sides belong to the same coherent operational work unit, \
 including its normal implementation, review, testing, debugging, \
 correction and immediate follow-up.
 
 DEFINITION OF BOUNDARY:
-A new coherent professional work unit begins, with a materially different \
-goal, problem, or deliverable, even if it belongs to the same project.
+A new coherent operational work unit begins: a materially different \
+task, problem, decision, investigation, or deliverable, even if it \
+starts immediately after the previous one and even if it belongs to the \
+same project.
 
 DEFINITION OF UNCERTAIN:
-The supplied context is insufficient, or the transition itself does not \
-allow a reliable decision.
+The supplied context does not allow a semantically reliable distinction \
+between SAME_EPISODE and BOUNDARY.
 
-IMPORTANT DISTINCTIONS:
-- a new substep is not a boundary;
-- question -> answer is not a boundary;
-- implementation -> review is not a boundary;
-- test -> fix -> retest is not a boundary;
-- a new tool or strategy for the same problem is not a boundary;
-- a new deliverable can be a boundary;
-- an explicit move to a different problem can be a boundary;
-- a long time gap is evidence, not proof;
-- a lexical shift is evidence, not proof;
-- markers are evidence, not proof.
+WHAT DOES NOT, BY ITSELF, IMPLY SAME_EPISODE:
+- the same project;
+- the same customer;
+- the same system or technology;
+- the same broad topic;
+- temporal proximity (a new work unit can start immediately after the \
+previous one).
+None of the above is sufficient on its own to decide SAME_EPISODE. The \
+decision must rest on whether the concrete task, problem, decision, \
+investigation, or deliverable is the same or has materially changed.
+
+IMPORTANT DISTINCTIONS — remain SAME_EPISODE:
+- a new substep of the same work unit;
+- question -> answer;
+- implementation -> review;
+- implementation -> test;
+- test -> fix -> retest;
+- debugging of the same problem;
+- correction of the same deliverable;
+- a new tool or strategy for the same problem;
+- an ordinary immediate follow-up of the same work unit.
+
+IMPORTANT DISTINCTIONS — can be BOUNDARY:
+- a new deliverable;
+- an explicit move to a materially different task, problem, decision, or \
+investigation, even inside the same project, customer, system, or topic.
+None of the following, by itself, is sufficient to establish a boundary: \
+a lexical shift alone, a new message alone, a change of interlocutor \
+alone, a time gap alone, or a marker alone. A boundary requires that a \
+new coherent operational work unit has actually started.
+
+CANDIDATE_SCORE AND OTHER M4.2A SIGNALS:
+candidate_score is a Boundary Evidence Score produced by a deterministic \
+upstream detector. It is NOT a probability of BOUNDARY, NOT a semantic \
+confidence, and NOT a target value for your confidence. Do not copy \
+candidate_score into your confidence, do not derive your confidence from \
+it mathematically, and do not treat candidate_class as a pre-made \
+decision. candidate_score, candidate_class, time gap, lexical shift, and \
+markers are supporting evidence only, to be weighed alongside the \
+dialogue context — never a substitute for your own semantic judgment. \
+Your confidence must reflect only how reliable you consider your own \
+semantic classification to be, given the available context.
 
 OUTPUT:
 Return only a structured decision (SAME_EPISODE, BOUNDARY, or UNCERTAIN), \
