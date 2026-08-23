@@ -101,3 +101,123 @@ def test_v0_2_uncertain_remains_available_for_insufficient_semantic_evidence():
 def test_v0_2_task_instruction_contains_no_gold_pilot_ids():
     text = TASK_INSTRUCTION.upper()
     assert "GOLD-" not in text
+
+
+# M4.2b-E — TASK_INSTRUCTION v0.3 two-stage semantic procedure invariants.
+# As for v0.2, these tests check the instruction text (and the payload
+# contract) only; they encode no Gold Pilot record, ID, or expected judge
+# decision. The two stages are a reasoning structure inside ONE judge
+# request — no second model call exists anywhere to test.
+
+
+def test_v0_3_stage_1_identifies_before_and_after_work_units():
+    # Invariant A: explicit, independent identification of both work units.
+    text = TASK_INSTRUCTION
+    assert "STAGE 1" in text
+    assert "identify independently" in text
+    assert "the BEFORE work unit" in text
+    assert "the AFTER work unit" in text
+    lower = text.lower()
+    assert "concrete work or deliverable being pursued in context before" in lower
+    assert "concrete work or deliverable being pursued in context after" in lower
+
+
+def test_v0_3_comparison_happens_after_identification():
+    # Invariant B: STAGE 2 compares only after STAGE 1 identified both units.
+    text = TASK_INSTRUCTION
+    assert "STAGE 2" in text
+    assert "Only after both work units are identified" in text
+    assert text.index("STAGE 1") < text.index("STAGE 2")
+
+
+def test_v0_3_same_project_topic_system_insufficient_for_same_episode():
+    # Invariant C: shared project/topic/system context never decides SAME.
+    lower = TASK_INSTRUCTION.lower()
+    assert "what does not, by itself, imply same_episode" in lower
+    assert "none of the above is sufficient on its own to decide same_episode" in lower
+    assert "whether the two identified work units share the" in lower
+
+
+def test_v0_3_tool_substep_method_change_insufficient_for_boundary():
+    # Invariant D: tool/method/substep changes serving the same work unit
+    # are explicitly insufficient for BOUNDARY.
+    lower = TASK_INSTRUCTION.lower()
+    assert "what does not, by itself, imply boundary" in lower
+    assert (
+        "a change of tool, implementation method, substep, perspective, or "
+        "intermediate artifact" in lower
+    )
+    assert "serves the same immediate operational work unit" in lower
+
+
+def test_v0_3_continuation_forms_remain_same_episode():
+    # Invariant E: implementation/review/test/debug/fix/follow-up stay SAME.
+    lower = TASK_INSTRUCTION.lower()
+    assert (
+        "continues, implements, reviews, tests, debugs, corrects, clarifies, "
+        "or immediately follows up the same operational work unit" in lower
+    )
+
+
+def test_v0_3_materially_different_goal_can_be_boundary():
+    # Invariant F: a materially different immediate goal/problem/deliverable
+    # can be BOUNDARY even inside the same project.
+    lower = TASK_INSTRUCTION.lower()
+    assert "begins a materially different operational work unit" in lower
+    assert "with a different immediate goal, problem, or deliverable" in lower
+
+
+def test_v0_3_uncertain_covers_unidentifiable_work_units():
+    # Invariant G: UNCERTAIN remains available when the two work units
+    # cannot be identified or compared reliably.
+    lower = TASK_INSTRUCTION.lower()
+    assert (
+        "does not allow the two operational work units to be identified or "
+        "compared reliably" in lower
+    )
+
+
+def test_v0_3_candidate_score_anti_anchoring_preserved():
+    # Invariant H: the v0.2 anti-anchoring section survives v0.3 verbatim.
+    assert "candidate_score is a Boundary Evidence Score" in TASK_INSTRUCTION
+    assert "It is NOT a probability of BOUNDARY" in TASK_INSTRUCTION
+    assert "NOT a target value for your confidence" in TASK_INSTRUCTION
+    lower = TASK_INSTRUCTION.lower()
+    assert "do not copy candidate_score into your confidence" in lower
+    assert "do not derive your confidence from it mathematically" in lower
+
+
+def test_v0_3_work_units_are_internal_scaffolding_never_output():
+    # Invariant I (instruction side): work units never appear in the output.
+    lower = TASK_INSTRUCTION.lower()
+    assert "internal reasoning scaffolding only" in lower
+    assert "never add them, or any other field, to the output" in lower
+    assert "return only a structured decision" in lower
+    assert "Do not include chain-of-thought" in TASK_INSTRUCTION
+
+
+def test_v0_3_judge_payload_contract_has_no_work_unit_fields():
+    # Invariant I (payload side): the externally visible contract is
+    # unchanged — no before_work_unit/after_work_unit anywhere.
+    payload = build_judge_input(_request())
+    assert set(payload.keys()) == {
+        "task_instruction",
+        "candidate_id",
+        "conversation_id",
+        "before_node_id",
+        "after_node_id",
+        "before_context",
+        "after_context",
+        "m4_2a_evidence",
+    }
+    assert "before_work_unit" not in payload
+    assert "after_work_unit" not in payload
+
+
+def test_v0_3_no_gold_pilot_ids_or_examples():
+    # Invariant J: no Gold IDs and no few-shot examples in the instruction.
+    upper = TASK_INSTRUCTION.upper()
+    assert "GOLD-" not in upper
+    assert "GOLD PILOT" not in upper
+    assert "EXAMPLE:" not in upper
+    assert "FOR EXAMPLE" not in upper
