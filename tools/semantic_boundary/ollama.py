@@ -32,6 +32,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from tools.semantic_boundary.judge import JudgeError, JudgeResponse, SemanticJudge
 from tools.semantic_boundary.models import (
+    DECISION_BOUNDARY,
+    DECISION_SAME_EPISODE,
+    DECISION_UNCERTAIN,
     DialogueTurn,
     RequestValidationError,
     ResolutionValidationError,
@@ -56,7 +59,14 @@ DEFAULT_TIMEOUT_SECONDS = 120.0
 GENERATE_ENDPOINT_PATH = "/api/generate"
 
 ADAPTER_NAME = "ollama"
-ADAPTER_VERSION = "0.1"
+# M4.2b-D bump (0.1 -> 0.2): the Ollama generation constraint changed from
+# generic "format": "json" to an explicit JSON Schema (STRUCTURED_OUTPUT_SCHEMA
+# below). The SemanticJudge/JudgeResponse contract and the local defensive
+# validation are unchanged; only the upstream generation constraint is
+# materially different, hence the adapter version bump rather than a
+# resolver/contract version change (RESOLVER_VERSION in models.py is
+# untouched).
+ADAPTER_VERSION = "0.2"
 
 # Istruzione di formato output, in aggiunta al TASK_INSTRUCTION di M4.2b-A
 # (prompt.py). Specifica solo la forma strutturata attesa, non altera la
@@ -72,6 +82,36 @@ exactly these keys:
   "reason": "<short, concise, auditable, semantic explanation>"
 }\
 """
+
+# M4.2b-D — Ollama structured-output generation constraint (JSON Schema),
+# passed as the request's "format" field instead of the generic "json"
+# string. This aligns the upstream generation constraint with the
+# pre-existing SemanticJudge output contract (decision/confidence/reason,
+# see models.py/judge.py) rather than relying on free-form "valid JSON"
+# (which some models satisfy with e.g. "{}"). It is a generation aid only:
+# the local Python validation below (_extract_decision_tuple,
+# validate_decision, validate_confidence) remains the sole authoritative
+# defensive layer and is never weakened or bypassed because this schema
+# exists.
+STRUCTURED_OUTPUT_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "decision": {
+            "type": "string",
+            "enum": [DECISION_SAME_EPISODE, DECISION_BOUNDARY, DECISION_UNCERTAIN],
+        },
+        "confidence": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+        },
+        "reason": {
+            "type": "string",
+        },
+    },
+    "required": ["decision", "confidence", "reason"],
+    "additionalProperties": False,
+}
 
 # Campi obbligatori di un record Gold Pilot esterno grezzo (una riga
 # JSONL). Convenzione M4.2b-B: candidate dict "piatto" (stessa forma
@@ -213,7 +253,7 @@ class OllamaSemanticJudge(SemanticJudge):
             "model": self.model,
             "prompt": prompt_text,
             "stream": False,
-            "format": "json",
+            "format": STRUCTURED_OUTPUT_SCHEMA,
             "options": options,
         }
         url = f"{self.base_url}{GENERATE_ENDPOINT_PATH}"

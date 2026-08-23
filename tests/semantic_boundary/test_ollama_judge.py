@@ -21,9 +21,11 @@ from tools.semantic_boundary.prompt import TASK_INSTRUCTION
 from tools.semantic_boundary.resolver import ResolutionFailure
 import tools.semantic_boundary.ollama as ollama_module
 from tools.semantic_boundary.ollama import (
+    ADAPTER_VERSION,
     DEFAULT_MODEL,
     DEFAULT_OLLAMA_BASE_URL,
     GENERATE_ENDPOINT_PATH,
+    STRUCTURED_OUTPUT_SCHEMA,
     OllamaHTTPError,
     OllamaResponseError,
     OllamaSemanticJudge,
@@ -116,6 +118,47 @@ def test_temperature_zero_and_optional_seed(monkeypatch):
     assert options["seed"] == 42
 
 
+# M4.2b-D, A/B: la request non usa più il generico "format": "json" — usa
+# lo schema strutturato esatto del contratto SemanticJudge esistente.
+def test_request_format_is_structured_schema_not_generic_json(monkeypatch):
+    fake = _RecordingHttp([_ok_envelope()])
+    monkeypatch.setattr(ollama_module, "_http_post_json", fake)
+
+    judge = OllamaSemanticJudge()
+    judge.resolve(_request())
+
+    sent_format = fake.calls[0]["payload"]["format"]
+    assert sent_format != "json"
+    assert isinstance(sent_format, dict)
+    assert sent_format == STRUCTURED_OUTPUT_SCHEMA
+
+
+# M4.2b-D, C/D/E/F/G/H: forma esatta dello schema strutturato, allineata al
+# contratto pre-esistente di JudgeResponse/models.py (decision/confidence/
+# reason, nient'altro).
+def test_structured_output_schema_matches_existing_semantic_contract():
+    assert STRUCTURED_OUTPUT_SCHEMA["type"] == "object"
+    assert STRUCTURED_OUTPUT_SCHEMA["additionalProperties"] is False
+    assert set(STRUCTURED_OUTPUT_SCHEMA["required"]) == {"decision", "confidence", "reason"}
+    assert len(STRUCTURED_OUTPUT_SCHEMA["required"]) == 3
+
+    properties = STRUCTURED_OUTPUT_SCHEMA["properties"]
+    assert set(properties.keys()) == {"decision", "confidence", "reason"}
+
+    decision_schema = properties["decision"]
+    assert decision_schema["type"] == "string"
+    assert set(decision_schema["enum"]) == {DECISION_SAME_EPISODE, DECISION_BOUNDARY, DECISION_UNCERTAIN}
+    assert len(decision_schema["enum"]) == 3
+
+    confidence_schema = properties["confidence"]
+    assert confidence_schema["type"] == "number"
+    assert confidence_schema["minimum"] == 0.0
+    assert confidence_schema["maximum"] == 1.0
+
+    reason_schema = properties["reason"]
+    assert reason_schema["type"] == "string"
+
+
 # E: gold labels/notes non finiscono mai nell'input al modello.
 def test_gold_label_and_notes_are_never_sent_to_the_judge(monkeypatch):
     record = _gold_pilot_record(gold_label="TRUE", gold_notes="secret annotator note")
@@ -158,7 +201,7 @@ def test_valid_structured_response_for_each_decision(monkeypatch, decision):
     assert response.confidence == 0.55
     assert response.reason == "Motivazione breve."
     assert response.judge_name == "ollama"
-    assert response.judge_version == f"0.1+{DEFAULT_MODEL}"
+    assert response.judge_version == f"{ADAPTER_VERSION}+{DEFAULT_MODEL}"
 
 
 # I: JSON malformato viene rifiutato dopo il repair retry.
