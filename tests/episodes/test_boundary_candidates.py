@@ -11,7 +11,11 @@ intermediate provenance on BoundaryCandidate).
 import json
 
 from tests.episodes.fixtures import chain_conversation, linear_conversation, make_conversation, make_node
-from tools.episodes.boundary_candidates import generate_boundary_candidates, write_output
+from tools.episodes.boundary_candidates import (
+    generate_boundary_candidates,
+    select_current_path_message_nodes,
+    write_output,
+)
 from tools.episodes.models import FEATURE_VERSION
 
 
@@ -322,3 +326,70 @@ def test_candidate_serializes_to_json_cleanly():
         assert "intermediate_node_ids" in restored
         assert "intermediate_content_types" in restored
         assert "intermediate_node_count" in restored
+
+
+# ---------------------------------------------------------------------------
+# Shared input-selection helper (select_current_path_message_nodes) —
+# authoritative policy reused by M5.1 (tools/retrieval_units), never
+# duplicated. Predicate: has_message is True, is_current_path is True,
+# is_technical_root is False; input order preserved exactly, no sorting,
+# no timestamp use, no visibility filtering.
+# ---------------------------------------------------------------------------
+
+
+def _selection_fixture_nodes():
+    return {
+        "root": make_node("conv-sel", "root", None, has_message=False, is_technical_root=True, content_type=None),
+        "n1": make_node("conv-sel", "n1", "root", role="user", text_parts=["one"], created_at=900.0),
+        "no-msg": make_node("conv-sel", "no-msg", "n1", has_message=False, content_type=None),
+        "off-path": make_node("conv-sel", "off-path", "n1", role="assistant", text_parts=["side"], is_current_path=False),
+        "n2": make_node("conv-sel", "n2", "n1", role="assistant", content_type="thoughts",
+                        content={"content_type": "thoughts"}, created_at=5.0),
+        "n3": make_node("conv-sel", "n3", "n2", role="user", text_parts=["three"], created_at=None),
+    }
+
+
+def test_select_current_path_message_nodes_applies_exact_predicate():
+    nodes = _selection_fixture_nodes()
+    ordered = ["root", "n1", "no-msg", "off-path", "n2", "n3"]
+    selected = select_current_path_message_nodes(ordered, nodes)
+    # Technical root, message-less node and non-current-path node are
+    # excluded; visible and non-visible message nodes are both kept —
+    # visibility is a downstream (projection) concern, not selection.
+    assert [node["node_id"] for node in selected] == ["n1", "n2", "n3"]
+
+
+def test_select_current_path_message_nodes_preserves_input_order_exactly():
+    nodes = _selection_fixture_nodes()
+    ordered = ["n3", "n1", "n2"]
+    selected = select_current_path_message_nodes(ordered, nodes)
+    assert [node["node_id"] for node in selected] == ["n3", "n1", "n2"]
+
+
+def test_select_current_path_message_nodes_ignores_timestamps():
+    # created_at values are deliberately non-monotonic (900.0, 5.0, None):
+    # they must affect neither selection nor order.
+    nodes = _selection_fixture_nodes()
+    selected = select_current_path_message_nodes(["n1", "n2", "n3"], nodes)
+    assert [node["node_id"] for node in selected] == ["n1", "n2", "n3"]
+    assert [node["created_at"] for node in selected] == [900.0, 5.0, None]
+
+
+def test_generate_boundary_candidates_matches_shared_helper_selection():
+    # The engine's per-conversation message-node count must equal what the
+    # shared helper selects on the same current path — no second predicate.
+    fixture = chain_conversation(
+        "conv-sel2",
+        [
+            {"role": "user", "text_parts": ["a"]},
+            {"role": "assistant", "content_type": "thoughts", "content": {"content_type": "thoughts"}},
+            {"role": "assistant", "text_parts": ["b"]},
+        ],
+    )
+    nodes_by_id = {node["node_id"]: node for node in fixture["nodes"]}
+    ordered = ["root", "n1", "n2", "n3"]
+    selected = select_current_path_message_nodes(ordered, nodes_by_id)
+    _, _, current_path_counts, _, _ = generate_boundary_candidates(
+        [fixture["conversation"]], fixture["nodes"]
+    )
+    assert current_path_counts["conv-sel2"] == len(selected) == 3

@@ -87,6 +87,38 @@ def _index_nodes_by_conversation(
     return by_conversation
 
 
+def select_current_path_message_nodes(
+    ordered_node_ids: List[str],
+    conversation_nodes: Dict[str, Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Selezione autorevole dei nodi-messaggio del current path (doc M4.2a,
+    sezione input selection): has_message == true, is_current_path ==
+    true, is_technical_root == false. Per costruzione ogni nodo prodotto
+    dal walk su parent_id (reconstruct_current_path) è già sul current
+    path; questo filtro è la guardia finale ed esplicita contro
+    l'inclusione silenziosa di un nodo malformato/inconsistente invece
+    della sua esclusione.
+
+    Restituisce l'insieme completo dei nodi-messaggio del current path —
+    visibili e non visibili insieme — nell'ordine esatto di
+    ordered_node_ids (ordine di grafo): nessun sort, nessun uso dei
+    timestamp, nessuna policy di visibilità (quella resta in
+    tools/episodes/projection.py, a valle).
+
+    Helper pubblico di proposito: è l'unica sede della policy di input
+    selection, riusata sia da generate_boundary_candidates (M4.2a) sia
+    da tools/retrieval_units (M5.1) — mai duplicarne il predicato.
+    """
+    return [
+        conversation_nodes[node_id]
+        for node_id in ordered_node_ids
+        if conversation_nodes[node_id].get("has_message") is True
+        and conversation_nodes[node_id].get("is_current_path") is True
+        and conversation_nodes[node_id].get("is_technical_root") is False
+    ]
+
+
 def _build_candidate(
     conversation_id: str,
     sequence_index: int,
@@ -235,21 +267,10 @@ def generate_boundary_candidates(
         )
         anomalies.extend(path_anomalies)
 
-        # Selezione secondo doc, sezione input selection: has_message ==
-        # true, is_current_path == true, is_technical_root == false. Per
-        # costruzione ogni nodo raggiunto tramite il walk su parent_id
-        # sopra è già sul current path; questo filtro è la guardia finale
-        # ed esplicita contro l'inclusione silenziosa di un nodo
-        # malformato/inconsistente invece della sua esclusione. Questo è
-        # ancora l'insieme completo dei nodi-messaggio del current path —
-        # visibili e non visibili insieme; la projection avviene dopo.
-        message_nodes = [
-            conversation_nodes[node_id]
-            for node_id in ordered_node_ids
-            if conversation_nodes[node_id].get("has_message") is True
-            and conversation_nodes[node_id].get("is_current_path") is True
-            and conversation_nodes[node_id].get("is_technical_root") is False
-        ]
+        # Selezione autorevole condivisa (vedi il docstring dell'helper):
+        # insieme completo dei nodi-messaggio del current path, visibili
+        # e non visibili insieme; la projection avviene dopo.
+        message_nodes = select_current_path_message_nodes(ordered_node_ids, conversation_nodes)
 
         per_conversation_current_path_message_counts[conversation_id] = len(message_nodes)
 
